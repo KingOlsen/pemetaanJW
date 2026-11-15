@@ -1,0 +1,6 @@
+{
+  "name": "Sistem Pemetaan Jadual Versi Premium",
+  "description": "Sistem pemetaan jadual waktu induk sekolah, pengurusan guru ganti automatik (relief), analisis beban tugas guru dan penjanaan aktiviti MMI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidRecord(data, recordId) {
+      return data.keys().hasAll(['id', 'type']) &&
+        data.keys().hasOnly(['id', 'type', 'name', 'username', 'role', 'subject', 'maxHours', 'level', 'class_id', 'subject_id', 'teacher_id']) &&
+        data.id is string && data.id == recordId && isValidId(data.id) &&
+        data.type is string && data.type in ['user', 'teacher', 'class', 'subject', 'assignment', 'level'] &&
+        (!('name' in data) || (data.name is string && data.name.size() <= 200)) &&
+        (!('username' in data) || (data.username is string && data.username.size() <= 200)) &&
+        (!('role' in data) || (data.role is string && data.role.size() <= 200)) &&
+        (!('subject' in data) || (data.subject is string && data.subject.size() <= 200)) &&
+        (!('maxHours' in data) || (data.maxHours is number && data.maxHours >= 1 && data.maxHours <= 100)) &&
+        (!('level' in data) || (data.level is string && data.level in ['Tahap 1', 'Tahap 2', 'Tahap 3'])) &&
+        (!('class_id' in data) || (data.class_id is string && data.class_id.size() <= 128)) &&
+        (!('subject_id' in data) || (data.subject_id is string && data.subject_id.size() <= 128)) &&
+        (!('teacher_id' in data) || (data.teacher_id is string && data.teacher_id.size() <= 128));
+    }
+
+    match /records/{recordId} {
+      allow get: if isValidId(recordId);
+      allow list: if resource.data.type in ['user', 'teacher', 'class', 'subject', 'assignment', 'level'];
+      allow create: if isValidId(recordId) && isValidRecord(incoming(), recordId);
+      allow update: if isValidId(recordId) && isValidRecord(incoming(), recordId) &&
+        incoming().id == existing().id &&
+        incoming().type == existing().type &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'username', 'role', 'subject', 'maxHours', 'level', 'class_id', 'subject_id', 'teacher_id']);
+      allow delete: if isValidId(recordId);
+    }
+  }
+}

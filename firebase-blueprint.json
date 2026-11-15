@@ -1,0 +1,76 @@
+{
+  "entities": {
+    "Record": {
+      "title": "Record",
+      "description": "A school schedule mapping record representing a school user profile, teacher, class, subject, or teaching assignment.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique record identifier.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "description": "Record category type.",
+          "enum": ["user", "teacher", "class", "subject", "assignment", "level"]
+        },
+        "name": {
+          "type": "string",
+          "description": "Name or code of the school, teacher, class, subject, or level (Tahap 1, 2, 3).",
+          "maxLength": 200
+        },
+        "username": {
+          "type": "string",
+          "description": "School full name (for user type) or parent school ID reference.",
+          "maxLength": 200
+        },
+        "role": {
+          "type": "string",
+          "description": "School password (for user), class teacher ID (for class), Tahap 1 period count (for subject), or Tahun (Tahun 1-6 for level).",
+          "maxLength": 200
+        },
+        "subject": {
+          "type": "string",
+          "description": "Teacher short code (for teacher) or Tahap 2 period count (for subject).",
+          "maxLength": 200
+        },
+        "maxHours": {
+          "type": "number",
+          "description": "Maximum weekly teaching hours (periods) for a teacher."
+        },
+        "level": {
+          "type": "string",
+          "description": "Class level classification (Tahap 1, Tahap 2, or Tahap 3).",
+          "enum": ["Tahap 1", "Tahap 2", "Tahap 3"]
+        },
+        "class_id": {
+          "type": "string",
+          "description": "Assigned class ID for an assignment record.",
+          "maxLength": 128
+        },
+        "subject_id": {
+          "type": "string",
+          "description": "Assigned subject ID for an assignment record.",
+          "maxLength": 128
+        },
+        "teacher_id": {
+          "type": "string",
+          "description": "Assigned teacher ID for an assignment record.",
+          "maxLength": 128
+        }
+      },
+      "required": ["id", "type"]
+    }
+  },
+  "firestore": {
+    "/records/{recordId}": {
+      "schema": {
+        "$ref": "#/entities/Record"
+      },
+      "description": "Stores all school schedule mapping records (schools, teachers, classes, subjects, and assignments) synced across all devices."
+    }
+  }
+}
