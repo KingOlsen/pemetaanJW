@@ -146,6 +146,7 @@ export default function App() {
   // Section 4: Class Form State
   const [showClassForm, setShowClassForm] = useState(false);
   const [newClassYear, setNewClassYear] = useState('Tahun 1');
+  const [newClassLevel, setNewClassLevel] = useState('Tahap 1');
   const [newClassName, setNewClassName] = useState('');
   const [newClassShortname, setNewClassShortname] = useState('');
   const [newClassTeacher, setNewClassTeacher] = useState('');
@@ -262,6 +263,19 @@ export default function App() {
         }
       },
       (error) => {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        if (errMsg.toLowerCase().includes('quota') || errMsg.includes('resource-exhausted')) {
+          if (!initialRouteResolvedRef.current) {
+            initialRouteResolvedRef.current = true;
+            const users = localParsed.filter((d) => d.type === 'user');
+            switchTab(users.length === 0 ? 1 : 2);
+          }
+          showMessage(
+            'Had bacaan harian Firestore telah penuh. Data cache lokal dipaparkan buat sementara.',
+            'error'
+          );
+          return;
+        }
         try {
           handleFirestoreError(error, OperationType.LIST, RECORDS_COLLECTION);
         } catch {
@@ -514,6 +528,7 @@ export default function App() {
       setNewTeacherMaxHours('30');
     } else if (type === 'class') {
       setNewClassYear('Tahun 1');
+      setNewClassLevel('Tahap 1');
       setNewClassName('');
       setNewClassShortname('');
       setNewClassTeacher('');
@@ -678,7 +693,7 @@ export default function App() {
     const name = newClassName.trim().toUpperCase();
     const shortname = newClassShortname.trim().toUpperCase();
     const teacherId = newClassTeacher;
-    const level = resolveTahapFromTahun(year);
+    const level = newClassLevel || resolveTahapFromTahun(year);
 
     if (!name) {
       showMessage('Sila masukkan nama kelas', 'error');
@@ -865,7 +880,9 @@ export default function App() {
         : item.level === 'Tahap 2'
         ? 'Tahun 4'
         : 'Tahun 1';
-      setNewClassYear(item.class_id || inferredYear);
+      const resolvedYear = item.class_id || inferredYear;
+      setNewClassYear(resolvedYear);
+      setNewClassLevel(item.level || resolveTahapFromTahun(resolvedYear));
       setNewClassName(item.name || '');
       setNewClassShortname(item.subject || '');
       setNewClassTeacher(item.role || '');
@@ -1193,11 +1210,51 @@ export default function App() {
     }
     if (pages.length === 0) return;
 
+    const CANDIDATE_FONTS = [
+      15.5, 15, 14.5, 14, 13.5, 13, 12.5, 12, 11.5, 11, 10.5, 10, 9.5, 9, 8.5, 8,
+    ];
+
     let firstScale = 1;
     pages.forEach((el, idx) => {
       el.style.transform = 'none';
       el.style.width = `${TARGET_W}px`;
       el.style.minHeight = `${TARGET_H}px`;
+
+      const tableEl = el.querySelector<HTMLTableElement>('table.print-auto-table');
+      if (tableEl) {
+        let bestFont = 9;
+        let bestScale = 1;
+        let bestEffective = -1;
+        let foundNativeFit = false;
+
+        for (const fontSize of CANDIDATE_FONTS) {
+          tableEl.style.fontSize = `${fontSize}px`;
+          const naturalW = Math.max(TARGET_W, el.scrollWidth);
+          const naturalH = Math.max(TARGET_H, el.scrollHeight);
+          const scale = Math.min(1, TARGET_W / naturalW, TARGET_H / naturalH);
+          const effective = fontSize * scale;
+
+          if (scale >= 0.999) {
+            bestFont = fontSize;
+            bestScale = scale;
+            foundNativeFit = true;
+            break;
+          }
+
+          if (
+            effective > bestEffective + 0.05 ||
+            (Math.abs(effective - bestEffective) <= 0.05 && scale > bestScale)
+          ) {
+            bestEffective = effective;
+            bestFont = fontSize;
+            bestScale = scale;
+          }
+        }
+
+        if (!foundNativeFit) {
+          tableEl.style.fontSize = `${bestFont}px`;
+        }
+      }
 
       const naturalW = Math.max(TARGET_W, el.scrollWidth);
       const naturalH = Math.max(TARGET_H, el.scrollHeight);
@@ -1274,6 +1331,25 @@ export default function App() {
         return `${trimmed}..`;
       };
 
+      const drawFittedText = (
+        text: string,
+        x: number,
+        y: number,
+        maxW: number,
+        preferredSize: number,
+        minSize: number,
+        align: 'left' | 'center' | 'right' = 'center'
+      ) => {
+        let fs = preferredSize;
+        pdf.setFontSize(fs);
+        while (fs > minSize && pdf.getTextWidth(text) > maxW) {
+          fs = +(fs - 0.3).toFixed(2);
+          pdf.setFontSize(fs);
+        }
+        const fittedStr = fitText(text, maxW, fs);
+        pdf.text(fittedStr, x, y, { align });
+      };
+
       classPages.forEach((pageClasses, pageIndex) => {
         if (pageIndex > 0) {
           pdf.addPage('a4', 'landscape');
@@ -1282,41 +1358,41 @@ export default function App() {
         // 1. Letterhead Header
         pdf.setTextColor(15, 23, 42);
         pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(13);
+        pdf.setFontSize(14);
         pdf.text(
           String(currentUser.username || '-').toUpperCase(),
           pageW / 2,
-          13,
+          12.5,
           { align: 'center' }
         );
 
         pdf.setTextColor(79, 70, 229);
-        pdf.setFontSize(9);
+        pdf.setFontSize(9.5);
         pdf.text(
-          `KOD SEKOLAH: ${String(currentUser.name || '-').toUpperCase()}`,
+          'RUMUSAN PEMETAAN JADUAL WAKTU MENGIKUT KELAS',
           pageW / 2,
-          18,
+          17.5,
           { align: 'center' }
         );
 
         pdf.setTextColor(71, 85, 105);
-        pdf.setFontSize(7.5);
+        pdf.setFontSize(8);
         const dateHeaderText =
           classPages.length > 1
             ? `TARIKH CETAKAN: ${printDateStr.toUpperCase()}   •   MUKA SURAT ${pageIndex + 1} / ${classPages.length}`
             : `TARIKH CETAKAN: ${printDateStr.toUpperCase()}`;
-        pdf.text(dateHeaderText, pageW / 2, 22.5, {
+        pdf.text(dateHeaderText, pageW / 2, 22, {
           align: 'center',
         });
 
         pdf.setDrawColor(15, 23, 42);
         pdf.setLineWidth(0.6);
-        pdf.line(marginX, 25.5, pageW - marginX, 25.5);
+        pdf.line(marginX, 24.8, pageW - marginX, 24.8);
 
         // 2. Main Schedule Table (Max 15 Classes per A4 Landscape Page)
         const isLastPage = pageIndex === classPages.length - 1;
-        const tableTopY = 29;
-        const maxTableBottomY = isLastPage ? 176 : 196;
+        const tableTopY = 27.5;
+        const maxTableBottomY = isLastPage ? 177.5 : 199;
         const availTableH = maxTableBottomY - tableTopY;
 
         if (pageClasses.length === 0 || subjectsForPdf.length === 0) {
@@ -1331,34 +1407,48 @@ export default function App() {
           );
         } else {
           const clsCount = pageClasses.length;
-          const sizingRowCount =
-            classPages.length > 1 ? CLASSES_PER_PAGE : Math.max(clsCount, 1);
+          const sizingRowCount = Math.max(clsCount, 1);
           const subjCount = subjectsForPdf.length;
 
           const bilColW = 10;
-          const kelasColW = 36;
+          const kelasColW = subjCount <= 16 ? 54 : 48;
           const subjColW = (contentW - bilColW - kelasColW) / subjCount;
 
-          const baseTableH = classPages.length > 1 ? 167 : availTableH;
           const headerH = Math.min(
-            8.5,
-            Math.max(6, baseTableH / (sizingRowCount + 1.4))
+            12,
+            Math.max(7.2, availTableH / (sizingRowCount + 1.4))
           );
-          const baseRowH = Math.min(10.5, (baseTableH - headerH) / sizingRowCount);
           const rowH = Math.min(
-            baseRowH,
-            (availTableH - headerH) / Math.max(clsCount, 1)
+            18,
+            (availTableH - headerH) / sizingRowCount
           );
 
+          const headerHPt = headerH * 2.83465;
+          const rowHPt = rowH * 2.83465;
+
           const headerFontSize = Math.min(
-            7.8,
-            Math.max(4.8, Math.min(subjColW * 0.42, headerH * 0.55))
+            11,
+            Math.max(6, headerHPt * 0.54)
           );
+          const bilFontSize = Math.min(12, Math.max(6.8, rowHPt * 0.45));
+          const nameFontSize = Math.min(11.5, Math.max(6.5, rowHPt * 0.39));
           const cellFontSize = Math.min(
-            7.5,
-            Math.max(4.5, Math.min(subjColW * 0.38, rowH * 0.33))
+            11.5,
+            Math.max(6.2, Math.min(rowHPt * 0.38, subjColW * 0.65))
           );
-          const subFontSize = Math.max(3.8, cellFontSize - 1.2);
+          const subFontSize = Math.min(9.2, Math.max(5.0, cellFontSize * 0.8));
+          const nameSubFontSize = Math.min(
+            9.2,
+            Math.max(5.2, nameFontSize * 0.78)
+          );
+          const threeLineFontSize = Math.min(
+            cellFontSize * 0.92,
+            Math.max(5.0, rowHPt * 0.27)
+          );
+          const threeLineSubFontSize = Math.min(
+            subFontSize,
+            Math.max(4.4, rowHPt * 0.23)
+          );
 
           // Draw Table Header
           let curX = marginX;
@@ -1372,19 +1462,20 @@ export default function App() {
           pdf.rect(curX, curY, bilColW, headerH, 'FD');
           pdf.setTextColor(15, 23, 42);
           pdf.setFont('helvetica', 'bold');
-          pdf.setFontSize(headerFontSize);
-          pdf.text(
+          drawFittedText(
             'BIL.',
             curX + bilColW / 2,
             curY + headerH / 2 + headerFontSize * 0.12,
-            {
-              align: 'center',
-            }
+            bilColW - 1.5,
+            headerFontSize,
+            5.5,
+            'center'
           );
           curX += bilColW;
 
           // KELAS Header
           pdf.rect(curX, curY, kelasColW, headerH, 'FD');
+          pdf.setFontSize(headerFontSize);
           pdf.text(
             'KELAS',
             curX + 2,
@@ -1400,12 +1491,14 @@ export default function App() {
             pdf.setFillColor(241, 245, 249);
             pdf.rect(curX, curY, subjColW, headerH, 'FD');
             const label = String(subject.class_id || subject.name || '').toUpperCase();
-            const fitted = fitText(label, subjColW - 1.5, headerFontSize);
-            pdf.text(
-              fitted,
+            drawFittedText(
+              label,
               curX + subjColW / 2,
               curY + headerH / 2 + headerFontSize * 0.12,
-              { align: 'center' }
+              subjColW - 1.4,
+              headerFontSize,
+              4.8,
+              'center'
             );
             curX += subjColW;
           });
@@ -1421,46 +1514,68 @@ export default function App() {
               : null;
             const classTeacherName = classTeacherObj?.name || 'Tiada Guru Kelas';
 
+            const classTotalWaktu = subjectsForPdf.reduce((sum, subject) => {
+              const assignment = assignmentsForPdf.find(
+                (a) => a.class_id === cls.id && a.subject_id === subject.id
+              );
+              const t1 = assignment
+                ? teachersForPdf.find((t) => t.id === assignment.teacher_id)
+                : null;
+              const t2 =
+                assignment && assignment.role
+                  ? teachersForPdf.find((t) => t.id === assignment.role)
+                  : null;
+              if (!t1 && !t2) return sum;
+              const timeVal = parseFloat(
+                cls.level === 'Tahap 1'
+                  ? subject.role || '0'
+                  : cls.level === 'Tahap 3'
+                  ? subject.subject_id || '0'
+                  : subject.subject || '0'
+              );
+              return sum + (Number.isFinite(timeVal) ? timeVal : 0);
+            }, 0);
+
             // BIL. cell
             pdf.setFillColor(248, 250, 252);
             pdf.rect(rX, rY, bilColW, rowH, 'FD');
             pdf.setTextColor(15, 23, 42);
             pdf.setFont('helvetica', 'bold');
-            pdf.setFontSize(cellFontSize);
+            pdf.setFontSize(bilFontSize);
             pdf.text(
               String(globalIdx + 1),
               rX + bilColW / 2,
-              rY + rowH / 2 + cellFontSize * 0.12,
+              rY + rowH / 2 + bilFontSize * 0.12,
               { align: 'center' }
             );
             rX += bilColW;
 
-            // KELAS + Nama Guru Kelas cell
+            // KELAS + Jumlah Waktu & Nama Guru Kelas cell
             pdf.setFillColor(248, 250, 252);
             pdf.rect(rX, rY, kelasColW, rowH, 'FD');
-            const clsLabel = fitText(
-              String(cls.name || '').toUpperCase(),
-              kelasColW - 3,
-              cellFontSize
-            );
             pdf.setTextColor(15, 23, 42);
             pdf.setFont('helvetica', 'bold');
-            pdf.setFontSize(cellFontSize);
-            pdf.text(clsLabel, rX + 2, rY + rowH * 0.42, {
-              align: 'left',
-            });
-
-            const guruKelasLabel = fitText(
-              String(classTeacherName).toUpperCase(),
-              kelasColW - 3,
-              subFontSize
+            drawFittedText(
+              `${String(cls.name || '').toUpperCase()} | Jumlah Waktu : ${classTotalWaktu}w`,
+              rX + 2,
+              rY + rowH * 0.41,
+              kelasColW - 3.5,
+              nameFontSize,
+              5.2,
+              'left'
             );
+
             pdf.setTextColor(79, 70, 229);
             pdf.setFont('helvetica', 'bold');
-            pdf.setFontSize(subFontSize);
-            pdf.text(guruKelasLabel, rX + 2, rY + rowH * 0.78, {
-              align: 'left',
-            });
+            drawFittedText(
+              String(classTeacherName).toUpperCase(),
+              rX + 2,
+              rY + rowH * 0.79,
+              kelasColW - 3.5,
+              nameSubFontSize,
+              4.6,
+              'left'
+            );
             rX += kelasColW;
 
             // Subject cells
@@ -1489,46 +1604,63 @@ export default function App() {
               const centerX = rX + subjColW / 2;
 
               if (t1 && t2) {
-                const t1Text = fitText(
-                  String(t1.subject || t1.name || '').toUpperCase(),
-                  subjColW - 1.2,
-                  cellFontSize * 0.92
-                );
-                const t2Text = fitText(
-                  `+ ${String(t2.subject || t2.name || '').toUpperCase()}`,
-                  subjColW - 1.2,
-                  cellFontSize * 0.92
-                );
                 pdf.setTextColor(15, 23, 42);
                 pdf.setFont('helvetica', 'bold');
-                pdf.setFontSize(cellFontSize * 0.92);
-                pdf.text(t1Text, centerX, rY + rowH * 0.31, { align: 'center' });
-                pdf.text(t2Text, centerX, rY + rowH * 0.61, { align: 'center' });
+                drawFittedText(
+                  String(t1.subject || t1.name || '').toUpperCase(),
+                  centerX,
+                  rY + rowH * 0.3,
+                  subjColW - 1.2,
+                  threeLineFontSize,
+                  4.2,
+                  'center'
+                );
+                drawFittedText(
+                  `+ ${String(t2.subject || t2.name || '').toUpperCase()}`,
+                  centerX,
+                  rY + rowH * 0.58,
+                  subjColW - 1.2,
+                  threeLineFontSize,
+                  4.2,
+                  'center'
+                );
 
                 pdf.setTextColor(100, 116, 139);
                 pdf.setFont('helvetica', 'bold');
-                pdf.setFontSize(subFontSize);
-                pdf.text(`${time} Wkt`, centerX, rY + rowH * 0.88, {
-                  align: 'center',
-                });
+                drawFittedText(
+                  `${time} Wkt`,
+                  centerX,
+                  rY + rowH * 0.87,
+                  subjColW - 1.2,
+                  threeLineSubFontSize,
+                  3.8,
+                  'center'
+                );
               } else if (t1 || t2) {
                 const activeT = t1 || t2;
-                const tText = fitText(
-                  String(activeT?.subject || activeT?.name || '').toUpperCase(),
-                  subjColW - 1.2,
-                  cellFontSize
-                );
                 pdf.setTextColor(15, 23, 42);
                 pdf.setFont('helvetica', 'bold');
-                pdf.setFontSize(cellFontSize);
-                pdf.text(tText, centerX, rY + rowH * 0.44, { align: 'center' });
+                drawFittedText(
+                  String(activeT?.subject || activeT?.name || '').toUpperCase(),
+                  centerX,
+                  rY + rowH * 0.43,
+                  subjColW - 1.2,
+                  cellFontSize,
+                  4.5,
+                  'center'
+                );
 
                 pdf.setTextColor(100, 116, 139);
                 pdf.setFont('helvetica', 'bold');
-                pdf.setFontSize(subFontSize);
-                pdf.text(`${time} Wkt`, centerX, rY + rowH * 0.8, {
-                  align: 'center',
-                });
+                drawFittedText(
+                  `${time} Wkt`,
+                  centerX,
+                  rY + rowH * 0.8,
+                  subjColW - 1.2,
+                  subFontSize,
+                  4.0,
+                  'center'
+                );
               } else {
                 pdf.setTextColor(203, 213, 225);
                 pdf.setFont('helvetica', 'bold');
@@ -1561,7 +1693,7 @@ export default function App() {
 
           pdf.setTextColor(100, 116, 139);
           pdf.setFont('helvetica', 'bold');
-          pdf.setFontSize(7.5);
+          pdf.setFontSize(8);
           pdf.text('DISEDIAKAN OLEH,', leftSigX, sigTopY + 5, { align: 'center' });
           pdf.text('DISAHKAN OLEH,', rightSigX, sigTopY + 5, { align: 'center' });
 
@@ -1572,11 +1704,11 @@ export default function App() {
 
           pdf.setTextColor(51, 65, 85);
           pdf.setFont('helvetica', 'bold');
-          pdf.setFontSize(7.5);
-          pdf.text('PENOLONG KANAN PENTADBIRAN', leftSigX, sigTopY + 20, {
+          pdf.setFontSize(8);
+          pdf.text('PENOLONG KANAN PENTADBIRAN', leftSigX, sigTopY + 20.5, {
             align: 'center',
           });
-          pdf.text('GURU BESAR / PENGETUA', rightSigX, sigTopY + 20, {
+          pdf.text('GURU BESAR / PENGETUA', rightSigX, sigTopY + 20.5, {
             align: 'center',
           });
         }
@@ -1643,7 +1775,7 @@ export default function App() {
         (d) => d.type === 'assignment' && d.username === currentUser.id
       );
 
-      const TEACHERS_PER_PAGE = 24;
+      const TEACHERS_PER_PAGE = 22;
       const teacherPages: DataRecord[][] = [];
       for (let i = 0; i < teachersForPdf.length; i += TEACHERS_PER_PAGE) {
         teacherPages.push(teachersForPdf.slice(i, i + TEACHERS_PER_PAGE));
@@ -1662,6 +1794,25 @@ export default function App() {
         return `${trimmed}..`;
       };
 
+      const drawFittedText = (
+        text: string,
+        x: number,
+        y: number,
+        maxW: number,
+        preferredSize: number,
+        minSize: number,
+        align: 'left' | 'center' | 'right' = 'center'
+      ) => {
+        let fs = preferredSize;
+        pdf.setFontSize(fs);
+        while (fs > minSize && pdf.getTextWidth(text) > maxW) {
+          fs = +(fs - 0.3).toFixed(2);
+          pdf.setFontSize(fs);
+        }
+        const fittedStr = fitText(text, maxW, fs);
+        pdf.text(fittedStr, x, y, { align });
+      };
+
       teacherPages.forEach((pageTeachers, pageIndex) => {
         if (pageIndex > 0) {
           pdf.addPage('a4', 'landscape');
@@ -1670,41 +1821,41 @@ export default function App() {
         // 1. Letterhead Header
         pdf.setTextColor(15, 23, 42);
         pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(13);
+        pdf.setFontSize(14);
         pdf.text(
           String(currentUser.username || '-').toUpperCase(),
           pageW / 2,
-          13,
+          12.5,
           { align: 'center' }
         );
 
         pdf.setTextColor(79, 70, 229);
-        pdf.setFontSize(9);
+        pdf.setFontSize(9.5);
         pdf.text(
-          `KOD SEKOLAH: ${String(currentUser.name || '-').toUpperCase()}`,
+          'RUMUSAN PEMETAAN JADUAL WAKTU MENGIKUT GURU',
           pageW / 2,
-          18,
+          17.5,
           { align: 'center' }
         );
 
         pdf.setTextColor(71, 85, 105);
-        pdf.setFontSize(7.5);
+        pdf.setFontSize(8);
         const dateHeaderText =
           teacherPages.length > 1
             ? `TARIKH CETAKAN: ${printDateStr.toUpperCase()}   •   MUKA SURAT ${pageIndex + 1} / ${teacherPages.length}`
             : `TARIKH CETAKAN: ${printDateStr.toUpperCase()}`;
-        pdf.text(dateHeaderText, pageW / 2, 22.5, {
+        pdf.text(dateHeaderText, pageW / 2, 22, {
           align: 'center',
         });
 
         pdf.setDrawColor(15, 23, 42);
         pdf.setLineWidth(0.6);
-        pdf.line(marginX, 25.5, pageW - marginX, 25.5);
+        pdf.line(marginX, 24.8, pageW - marginX, 24.8);
 
-        // 2. Main Teacher Schedule Table (Max 25 Teachers per A4 Landscape Page)
+        // 2. Main Teacher Schedule Table (Max 22 Teachers per A4 Landscape Page)
         const isLastPage = pageIndex === teacherPages.length - 1;
-        const tableTopY = 29;
-        const maxTableBottomY = isLastPage ? 176 : 196;
+        const tableTopY = 27.5;
+        const maxTableBottomY = isLastPage ? 177.5 : 199;
         const availTableH = maxTableBottomY - tableTopY;
 
         if (pageTeachers.length === 0 || subjectsForPdf.length === 0) {
@@ -1716,34 +1867,49 @@ export default function App() {
           });
         } else {
           const tCount = pageTeachers.length;
-          const sizingRowCount =
-            teacherPages.length > 1 ? TEACHERS_PER_PAGE : Math.max(tCount, 1);
+          const sizingRowCount = Math.max(tCount, 1);
           const subjCount = subjectsForPdf.length;
 
           const bilColW = 10;
-          const guruColW = 48;
+          const guruColW = subjCount <= 16 ? 54 : 48;
           const subjColW = (contentW - bilColW - guruColW) / subjCount;
 
-          const baseTableH = teacherPages.length > 1 ? 167 : availTableH;
           const headerH = Math.min(
-            8.5,
-            Math.max(6, baseTableH / (sizingRowCount + 1.4))
+            12,
+            Math.max(7.0, availTableH / (sizingRowCount + 1.4))
           );
-          const baseRowH = Math.min(10.5, (baseTableH - headerH) / sizingRowCount);
           const rowH = Math.min(
-            baseRowH,
-            (availTableH - headerH) / Math.max(tCount, 1)
+            18,
+            (availTableH - headerH) / sizingRowCount
           );
 
+          const headerHPt = headerH * 2.83465;
+          const rowHPt = rowH * 2.83465;
+
           const headerFontSize = Math.min(
-            7.8,
-            Math.max(4.8, Math.min(subjColW * 0.42, headerH * 0.55))
+            11,
+            Math.max(6, headerHPt * 0.54)
+          );
+          const bilFontSize = Math.min(12, Math.max(6.8, rowHPt * 0.45));
+          const nameFontSize = Math.min(11.2, Math.max(6.4, rowHPt * 0.37));
+          const guruFontSize = +(nameFontSize * 1.1).toFixed(2);
+          const nameSubFontSize = Math.min(
+            9.0,
+            Math.max(5.0, nameFontSize * 0.78)
           );
           const cellFontSize = Math.min(
-            7.2,
-            Math.max(4.3, Math.min(subjColW * 0.36, rowH * 0.33))
+            11.5,
+            Math.max(6.0, Math.min(rowHPt * 0.38, subjColW * 0.65))
           );
-          const subFontSize = Math.max(3.8, cellFontSize - 1.1);
+          const subFontSize = Math.min(9.0, Math.max(4.8, cellFontSize * 0.78));
+          const twoLineFontSize = Math.min(
+            cellFontSize * 0.9,
+            Math.max(4.8, rowHPt * 0.27)
+          );
+          const twoLineSubFontSize = Math.min(
+            subFontSize,
+            Math.max(4.3, rowHPt * 0.23)
+          );
 
           // Draw Table Header
           let curX = marginX;
@@ -1756,18 +1922,19 @@ export default function App() {
           pdf.rect(curX, curY, bilColW, headerH, 'FD');
           pdf.setTextColor(15, 23, 42);
           pdf.setFont('helvetica', 'bold');
-          pdf.setFontSize(headerFontSize);
-          pdf.text(
+          drawFittedText(
             'BIL.',
             curX + bilColW / 2,
             curY + headerH / 2 + headerFontSize * 0.12,
-            {
-              align: 'center',
-            }
+            bilColW - 1.5,
+            headerFontSize,
+            5.5,
+            'center'
           );
           curX += bilColW;
 
           pdf.rect(curX, curY, guruColW, headerH, 'FD');
+          pdf.setFontSize(headerFontSize);
           pdf.text(
             'NAMA GURU',
             curX + 2,
@@ -1782,17 +1949,19 @@ export default function App() {
             pdf.setFillColor(241, 245, 249);
             pdf.rect(curX, curY, subjColW, headerH, 'FD');
             const label = String(subject.class_id || subject.name || '').toUpperCase();
-            const fitted = fitText(label, subjColW - 1.5, headerFontSize);
-            pdf.text(
-              fitted,
+            drawFittedText(
+              label,
               curX + subjColW / 2,
               curY + headerH / 2 + headerFontSize * 0.12,
-              { align: 'center' }
+              subjColW - 1.4,
+              headerFontSize,
+              4.8,
+              'center'
             );
             curX += subjColW;
           });
 
-          // Draw Teacher Rows (up to 25 per page)
+          // Draw Teacher Rows (up to 22 per page)
           pageTeachers.forEach((teacher, idx) => {
             const globalIdx = pageIndex * TEACHERS_PER_PAGE + idx;
             const rY = tableTopY + headerH + idx * rowH;
@@ -1818,26 +1987,41 @@ export default function App() {
             pdf.rect(rX, rY, bilColW, rowH, 'FD');
             pdf.setTextColor(15, 23, 42);
             pdf.setFont('helvetica', 'bold');
-            pdf.setFontSize(cellFontSize);
+            pdf.setFontSize(bilFontSize);
             pdf.text(
               String(globalIdx + 1),
               rX + bilColW / 2,
-              rY + rowH / 2 + cellFontSize * 0.12,
+              rY + rowH / 2 + bilFontSize * 0.12,
               { align: 'center' }
             );
             rX += bilColW;
 
-            // NAMA GURU cell
+            // NAMA GURU + Jumlah Waktu cell
             pdf.setFillColor(248, 250, 252);
             pdf.rect(rX, rY, guruColW, rowH, 'FD');
-            const guruLabel = fitText(
-              `${String(teacher.name || '').toUpperCase()} ( ${teacherTotalWaktu}w )`,
-              guruColW - 3,
-              cellFontSize
+            pdf.setTextColor(15, 23, 42);
+            pdf.setFont('helvetica', 'bold');
+            drawFittedText(
+              String(teacher.name || '').toUpperCase(),
+              rX + 2,
+              rY + rowH * 0.42,
+              guruColW - 3.5,
+              guruFontSize,
+              5.4,
+              'left'
             );
-            pdf.text(guruLabel, rX + 2, rY + rowH / 2 + cellFontSize * 0.12, {
-              align: 'left',
-            });
+
+            pdf.setTextColor(79, 70, 229);
+            pdf.setFont('helvetica', 'bold');
+            drawFittedText(
+              `Jumlah Waktu : ${teacherTotalWaktu}w`,
+              rX + 2,
+              rY + rowH * 0.8,
+              guruColW - 3.5,
+              nameSubFontSize,
+              4.6,
+              'left'
+            );
             rX += guruColW;
 
             // Subject cells for this teacher
@@ -1876,42 +2060,64 @@ export default function App() {
                   const mid = Math.ceil(classLabels.length / 2);
                   const topRowStr = classLabels.slice(0, mid).join(', ');
                   const bottomRowStr = classLabels.slice(mid).join(', ');
-                  const twoLineFontSize = Math.max(3.8, cellFontSize - 0.7);
-                  const fittedTop = fitText(topRowStr, subjColW - 1.2, twoLineFontSize);
-                  const fittedBottom = fitText(
-                    bottomRowStr,
+
+                  pdf.setTextColor(15, 23, 42);
+                  pdf.setFont('helvetica', 'bold');
+                  drawFittedText(
+                    topRowStr,
+                    centerX,
+                    rY + rowH * 0.3,
                     subjColW - 1.2,
-                    twoLineFontSize
+                    twoLineFontSize,
+                    4.0,
+                    'center'
+                  );
+                  drawFittedText(
+                    bottomRowStr,
+                    centerX,
+                    rY + rowH * 0.58,
+                    subjColW - 1.2,
+                    twoLineFontSize,
+                    4.0,
+                    'center'
                   );
 
-                  pdf.setTextColor(15, 23, 42);
-                  pdf.setFont('helvetica', 'bold');
-                  pdf.setFontSize(twoLineFontSize);
-                  pdf.text(fittedTop, centerX, rY + rowH * 0.3, { align: 'center' });
-                  pdf.text(fittedBottom, centerX, rY + rowH * 0.56, {
-                    align: 'center',
-                  });
-
                   pdf.setTextColor(100, 116, 139);
                   pdf.setFont('helvetica', 'bold');
-                  pdf.setFontSize(Math.max(3.5, subFontSize - 0.3));
-                  pdf.text(`${totalTime} Wkt`, centerX, rY + rowH * 0.85, {
-                    align: 'center',
-                  });
+                  drawFittedText(
+                    `${totalTime} Wkt`,
+                    centerX,
+                    rY + rowH * 0.87,
+                    subjColW - 1.2,
+                    twoLineSubFontSize,
+                    3.7,
+                    'center'
+                  );
                 } else {
                   const classNamesStr = classLabels.join(', ');
-                  const fittedCls = fitText(classNamesStr, subjColW - 1.2, cellFontSize);
                   pdf.setTextColor(15, 23, 42);
                   pdf.setFont('helvetica', 'bold');
-                  pdf.setFontSize(cellFontSize);
-                  pdf.text(fittedCls, centerX, rY + rowH * 0.44, { align: 'center' });
+                  drawFittedText(
+                    classNamesStr,
+                    centerX,
+                    rY + rowH * 0.43,
+                    subjColW - 1.2,
+                    cellFontSize,
+                    4.3,
+                    'center'
+                  );
 
                   pdf.setTextColor(100, 116, 139);
                   pdf.setFont('helvetica', 'bold');
-                  pdf.setFontSize(subFontSize);
-                  pdf.text(`${totalTime} Wkt`, centerX, rY + rowH * 0.8, {
-                    align: 'center',
-                  });
+                  drawFittedText(
+                    `${totalTime} Wkt`,
+                    centerX,
+                    rY + rowH * 0.8,
+                    subjColW - 1.2,
+                    subFontSize,
+                    3.9,
+                    'center'
+                  );
                 }
               } else {
                 pdf.setTextColor(203, 213, 225);
@@ -1944,7 +2150,7 @@ export default function App() {
 
           pdf.setTextColor(100, 116, 139);
           pdf.setFont('helvetica', 'bold');
-          pdf.setFontSize(7.5);
+          pdf.setFontSize(8);
           pdf.text('DISEDIAKAN OLEH,', leftSigX, sigTopY + 5, { align: 'center' });
           pdf.text('DISAHKAN OLEH,', rightSigX, sigTopY + 5, { align: 'center' });
 
@@ -1955,11 +2161,11 @@ export default function App() {
 
           pdf.setTextColor(51, 65, 85);
           pdf.setFont('helvetica', 'bold');
-          pdf.setFontSize(7.5);
-          pdf.text('PENOLONG KANAN PENTADBIRAN', leftSigX, sigTopY + 20, {
+          pdf.setFontSize(8);
+          pdf.text('PENOLONG KANAN PENTADBIRAN', leftSigX, sigTopY + 20.5, {
             align: 'center',
           });
-          pdf.text('GURU BESAR / PENGETUA', rightSigX, sigTopY + 20, {
+          pdf.text('GURU BESAR / PENGETUA', rightSigX, sigTopY + 20.5, {
             align: 'center',
           });
         }
@@ -2030,10 +2236,7 @@ export default function App() {
     }
   }, [
     currentTab,
-    schoolTeachers.length,
-    schoolClasses.length,
-    schoolSubjects.length,
-    schoolAssignments.length,
+    allData,
     currentUser,
   ]);
 
@@ -2100,31 +2303,66 @@ export default function App() {
 
             <div>
               {type === 'users' ? (
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-extrabold text-slate-800 tracking-tight text-sm uppercase leading-tight truncate">
-                      {item.name}
-                    </p>
-                    <p className="text-xs font-semibold text-indigo-600 mt-1 uppercase truncate">
-                      {item.username}
-                    </p>
-                    <p className="text-xs text-slate-400 mt-0.5">🔑 ••••••••</p>
-                  </div>
-                  <div className="shrink-0 bg-slate-50 border border-slate-200/80 rounded-lg px-3 py-1.5 space-y-1 text-left">
-                    <p className="text-xs font-bold text-slate-700 whitespace-nowrap">
-                      Bil Guru :{' '}
-                      <span className="text-indigo-600">
-                        {allData.filter((d) => d.type === 'teacher' && d.username === item.id).length}
-                      </span>
-                    </p>
-                    <p className="text-xs font-bold text-slate-700 whitespace-nowrap">
-                      Bil Kelas :{' '}
-                      <span className="text-indigo-600">
-                        {allData.filter((d) => d.type === 'class' && d.username === item.id).length}
-                      </span>
-                    </p>
-                  </div>
-                </div>
+                (() => {
+                  const schoolTeacherIds = new Set(
+                    allData
+                      .filter((d) => d.type === 'teacher' && d.username === item.id)
+                      .map((t) => t.id)
+                  );
+                  const schoolClassIds = new Set(
+                    allData
+                      .filter((d) => d.type === 'class' && d.username === item.id)
+                      .map((c) => c.id)
+                  );
+                  const schoolSubjectIds = new Set(
+                    allData
+                      .filter((d) => d.type === 'subject' && d.username === item.id)
+                      .map((s) => s.id)
+                  );
+                  const filledSlotCount = new Set(
+                    allData
+                      .filter(
+                        (d) =>
+                          d.type === 'assignment' &&
+                          d.username === item.id &&
+                          d.class_id &&
+                          d.subject_id &&
+                          schoolClassIds.has(d.class_id) &&
+                          schoolSubjectIds.has(d.subject_id) &&
+                          ((d.teacher_id && schoolTeacherIds.has(d.teacher_id)) ||
+                            (d.role && schoolTeacherIds.has(d.role)))
+                      )
+                      .map((d) => `${d.class_id}_${d.subject_id}`)
+                  ).size;
+
+                  return (
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-extrabold text-slate-800 tracking-tight text-sm uppercase leading-tight truncate">
+                          {item.name}
+                        </p>
+                        <p className="text-xs font-semibold text-indigo-600 mt-1 uppercase truncate">
+                          {item.username}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-0.5">🔑 ••••••••</p>
+                      </div>
+                      <div className="shrink-0 bg-slate-50 border border-slate-200/80 rounded-lg px-3 py-1.5 space-y-1 text-left">
+                        <p className="text-xs font-bold text-slate-700 whitespace-nowrap">
+                          Bil Guru :{' '}
+                          <span className="text-indigo-600">{schoolTeacherIds.size}</span>
+                        </p>
+                        <p className="text-xs font-bold text-slate-700 whitespace-nowrap">
+                          Bil Kelas :{' '}
+                          <span className="text-indigo-600">{schoolClassIds.size}</span>
+                        </p>
+                        <p className="text-xs font-bold text-slate-700 whitespace-nowrap">
+                          Bil Slot :{' '}
+                          <span className="text-indigo-600">{filledSlotCount}</span>
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()
               ) : (
                 <p className="font-extrabold text-slate-800 tracking-tight text-sm uppercase leading-tight truncate">
                   {item.name}
@@ -3376,7 +3614,7 @@ export default function App() {
                     >
                       {editingItem ? 'Ubah Data Kelas' : 'Daftar Kelas Baru'}
                     </h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
                       <div>
                         <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
                           Tahun
@@ -3384,7 +3622,11 @@ export default function App() {
                         <select
                           id="new-class-year"
                           value={newClassYear}
-                          onChange={(e) => setNewClassYear(e.target.value)}
+                          onChange={(e) => {
+                            const selectedYear = e.target.value;
+                            setNewClassYear(selectedYear);
+                            setNewClassLevel(resolveTahapFromTahun(selectedYear));
+                          }}
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-indigo-500 text-sm"
                         >
                           <option value="Tahun 1">Tahun 1</option>
@@ -3393,6 +3635,21 @@ export default function App() {
                           <option value="Tahun 4">Tahun 4</option>
                           <option value="Tahun 5">Tahun 5</option>
                           <option value="Tahun 6">Tahun 6</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                          Tahap
+                        </label>
+                        <select
+                          id="new-class-level"
+                          value={newClassLevel}
+                          onChange={(e) => setNewClassLevel(e.target.value)}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-indigo-500 text-sm"
+                        >
+                          <option value="Tahap 1">Tahap 1</option>
+                          <option value="Tahap 2">Tahap 2</option>
+                          <option value="Tahap 3">Tahap 3</option>
                         </select>
                       </div>
                       <div>
@@ -4483,7 +4740,7 @@ export default function App() {
                                   }
                                   className="text-xs font-bold text-indigo-600 mt-0.5 uppercase"
                                 >
-                                  Kod Sekolah: {currentUser?.name || '-'}
+                                  Rumusan Pemetaan Jadual Waktu Mengikut Kelas
                                 </p>
                                 <div className="mt-1.5 text-slate-600 text-[10px] font-bold uppercase tracking-wider flex justify-center gap-3">
                                   <span id={pageIndex === 0 ? 'print-date' : undefined}>
@@ -4512,20 +4769,12 @@ export default function App() {
                                     Tiada data asas untuk pratinjau cetakan.
                                   </p>
                                 ) : (
-                                  <table
-                                    className={`w-full border-collapse border-2 border-slate-900 leading-tight ${
-                                      pageClasses.length > 12 || schoolSubjects.length > 14
-                                        ? 'text-[8px]'
-                                        : pageClasses.length > 10 || schoolSubjects.length > 10
-                                        ? 'text-[9px]'
-                                        : 'text-[10px]'
-                                    }`}
-                                  >
+                                  <table className="print-auto-table w-full border-collapse border-2 border-slate-900 leading-tight text-[10px]">
                                     <thead>
                                       <tr className="bg-slate-100 text-slate-900 border-b-2 border-slate-900">
                                         <th
                                           className={`border-r border-slate-900 text-center font-extrabold w-9 ${
-                                            pageClasses.length > 12
+                                            pageClasses.length > 11
                                               ? 'py-1 px-1'
                                               : 'py-1.5 px-1.5'
                                           }`}
@@ -4533,8 +4782,8 @@ export default function App() {
                                           BIL.
                                         </th>
                                         <th
-                                          className={`border-r border-slate-900 font-extrabold text-left w-36 ${
-                                            pageClasses.length > 12
+                                          className={`border-r border-slate-900 font-extrabold text-left w-48 ${
+                                            pageClasses.length > 11
                                               ? 'py-1 px-1.5'
                                               : 'py-1.5 px-2'
                                           }`}
@@ -4545,7 +4794,7 @@ export default function App() {
                                           <th
                                             key={subject.id}
                                             className={`border-r border-slate-900 font-extrabold text-center uppercase ${
-                                              pageClasses.length > 12
+                                              pageClasses.length > 11
                                                 ? 'py-1 px-1'
                                                 : 'py-1.5 px-1.5'
                                             }`}
@@ -4562,14 +4811,48 @@ export default function App() {
                                         const cellPad =
                                           pageClasses.length > 12
                                             ? 'py-0.5 px-1'
-                                            : pageClasses.length > 10
-                                            ? 'py-1 px-1'
-                                            : 'py-1.5 px-1.5';
+                                            : pageClasses.length > 8
+                                            ? 'py-1 px-1.5'
+                                            : 'py-1.5 px-2';
                                         const classTeacherObj = cls.role
                                           ? schoolTeachers.find((t) => t.id === cls.role)
                                           : null;
                                         const classTeacherName =
                                           classTeacherObj?.name || 'Tiada Guru Kelas';
+                                        const classTotalWaktu = schoolSubjects.reduce(
+                                          (sum, subject) => {
+                                            const assignment = schoolAssignments.find(
+                                              (a) =>
+                                                a.class_id === cls.id &&
+                                                a.subject_id === subject.id
+                                            );
+                                            const assignedTeacher = assignment
+                                              ? schoolTeachers.find(
+                                                  (t) => t.id === assignment.teacher_id
+                                                )
+                                              : null;
+                                            const assignedTeacher2 =
+                                              assignment && assignment.role
+                                                ? schoolTeachers.find(
+                                                    (t) => t.id === assignment.role
+                                                  )
+                                                : null;
+                                            if (!assignedTeacher && !assignedTeacher2)
+                                              return sum;
+                                            const timeVal = parseFloat(
+                                              cls.level === 'Tahap 1'
+                                                ? subject.role || '0'
+                                                : cls.level === 'Tahap 3'
+                                                ? subject.subject_id || '0'
+                                                : subject.subject || '0'
+                                            );
+                                            return (
+                                              sum +
+                                              (Number.isFinite(timeVal) ? timeVal : 0)
+                                            );
+                                          },
+                                          0
+                                        );
                                         return (
                                           <tr
                                             key={cls.id}
@@ -4584,9 +4867,12 @@ export default function App() {
                                               className={`border-r border-slate-900 ${cellPad} bg-slate-50 uppercase whitespace-nowrap`}
                                             >
                                               <span className="font-extrabold text-slate-900 block leading-tight">
-                                                {cls.name}
+                                                {cls.name}{' '}
+                                                <span className="normal-case text-[0.9em] font-bold text-slate-600">
+                                                  | Jumlah Waktu : {classTotalWaktu}w
+                                                </span>
                                               </span>
-                                              <span className="text-[8px] font-bold text-indigo-600 block leading-tight mt-0.5">
+                                              <span className="text-[0.82em] font-bold text-indigo-600 block leading-tight mt-0.5">
                                                 {classTeacherName}
                                               </span>
                                             </td>
@@ -4634,7 +4920,7 @@ export default function App() {
                                                             assignedTeacher2.name}
                                                         </span>
                                                       )}
-                                                      <span className="text-[8px] text-slate-500 font-bold block leading-none mt-0.5">
+                                                      <span className="text-[0.8em] text-slate-500 font-bold block leading-none mt-0.5">
                                                         {time} Wkt
                                                       </span>
                                                     </>
@@ -4664,30 +4950,30 @@ export default function App() {
                               >
                                 <div
                                   className={
-                                    pageClasses.length > 12 ? 'space-y-6' : 'space-y-9'
+                                    pageClasses.length > 12 ? 'space-y-6' : 'space-y-8'
                                   }
                                 >
-                                  <p className="text-[10px] font-bold uppercase text-slate-500">
+                                  <p className="text-[11px] font-bold uppercase text-slate-500">
                                     Disediakan Oleh,
                                   </p>
                                   <div>
                                     <div className="w-44 mx-auto border-b border-slate-400"></div>
-                                    <p className="text-[10px] font-bold text-slate-700 mt-1 uppercase">
+                                    <p className="text-[11px] font-bold text-slate-700 mt-1 uppercase">
                                       Penolong Kanan Pentadbiran
                                     </p>
                                   </div>
                                 </div>
                                 <div
                                   className={
-                                    pageClasses.length > 12 ? 'space-y-6' : 'space-y-9'
+                                    pageClasses.length > 12 ? 'space-y-6' : 'space-y-8'
                                   }
                                 >
-                                  <p className="text-[10px] font-bold uppercase text-slate-500">
+                                  <p className="text-[11px] font-bold uppercase text-slate-500">
                                     Disahkan Oleh,
                                   </p>
                                   <div>
                                     <div className="w-44 mx-auto border-b border-slate-400"></div>
-                                    <p className="text-[10px] font-bold text-slate-700 mt-1 uppercase">
+                                    <p className="text-[11px] font-bold text-slate-700 mt-1 uppercase">
                                       Guru Besar / Pengetua
                                     </p>
                                   </div>
@@ -4729,9 +5015,9 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Document Outer Wrapper with A4 Landscape Page Frame (24 Teachers per Page) */}
+                {/* Document Outer Wrapper with A4 Landscape Page Frame (22 Teachers per Page) */}
                 {(() => {
-                  const TEACHERS_PER_PAGE = 24;
+                  const TEACHERS_PER_PAGE = 22;
                   const teacherPages: DataRecord[][] = [];
                   for (let i = 0; i < schoolTeachers.length; i += TEACHERS_PER_PAGE) {
                     teacherPages.push(schoolTeachers.slice(i, i + TEACHERS_PER_PAGE));
@@ -4796,7 +5082,7 @@ export default function App() {
                                   }
                                   className="text-xs font-bold text-indigo-600 mt-0.5 uppercase"
                                 >
-                                  Kod Sekolah: {currentUser?.name || '-'}
+                                  Rumusan Pemetaan Jadual Waktu Mengikut Guru
                                 </p>
                                 <div className="mt-1.5 text-slate-600 text-[10px] font-bold uppercase tracking-wider flex justify-center gap-3">
                                   <span id={pageIndex === 0 ? 'print-date' : undefined}>
@@ -4825,15 +5111,7 @@ export default function App() {
                                     Tiada data asas untuk pratinjau cetakan.
                                   </p>
                                 ) : (
-                                  <table
-                                    className={`w-full border-collapse border-2 border-slate-900 leading-tight ${
-                                      pageTeachers.length > 16 || schoolSubjects.length > 14
-                                        ? 'text-[8px]'
-                                        : pageTeachers.length > 10 || schoolSubjects.length > 10
-                                        ? 'text-[9px]'
-                                        : 'text-[10px]'
-                                    }`}
-                                  >
+                                  <table className="print-auto-table w-full border-collapse border-2 border-slate-900 leading-tight text-[10px]">
                                     <thead>
                                       <tr className="bg-slate-100 text-slate-900 border-b-2 border-slate-900">
                                         <th
@@ -4846,7 +5124,7 @@ export default function App() {
                                           BIL.
                                         </th>
                                         <th
-                                          className={`border-r border-slate-900 font-extrabold text-left w-40 ${
+                                          className={`border-r border-slate-900 font-extrabold text-left w-44 ${
                                             pageTeachers.length > 12
                                               ? 'py-1 px-1.5'
                                               : 'py-1.5 px-2'
@@ -4911,9 +5189,14 @@ export default function App() {
                                               {globalIndex + 1}
                                             </td>
                                             <td
-                                              className={`border-r border-slate-900 ${cellPad} font-extrabold bg-slate-50 uppercase whitespace-nowrap`}
+                                              className={`border-r border-slate-900 ${cellPad} bg-slate-50 uppercase whitespace-nowrap`}
                                             >
-                                              {teacher.name} ( {teacherTotalWaktu}w )
+                                              <span className="text-[1.1em] font-extrabold text-slate-900 block leading-tight">
+                                                {teacher.name}
+                                              </span>
+                                              <span className="normal-case text-[0.82em] font-bold text-indigo-600 block leading-tight mt-0.5">
+                                                Jumlah Waktu : {teacherTotalWaktu}w
+                                              </span>
                                             </td>
                                             {schoolSubjects.map((subject) => {
                                               const matchedAssignments =
@@ -4960,7 +5243,13 @@ export default function App() {
                                                 >
                                                   {matchedClasses.length > 0 ? (
                                                     <>
-                                                      <span className="font-extrabold text-slate-900 block leading-tight whitespace-nowrap">
+                                                      <span
+                                                        className={`font-extrabold text-slate-900 block leading-tight whitespace-nowrap ${
+                                                          classLabels.length > 2
+                                                            ? 'text-[0.9em]'
+                                                            : ''
+                                                        }`}
+                                                      >
                                                         {classLabels.length > 2 ? (
                                                           <>
                                                             <span className="block">
@@ -4978,7 +5267,7 @@ export default function App() {
                                                           classLabels.join(', ')
                                                         )}
                                                       </span>
-                                                      <span className="text-[8px] text-slate-500 font-bold block leading-none mt-0.5">
+                                                      <span className="text-[0.78em] text-slate-500 font-bold block leading-none mt-0.5">
                                                         {totalTime} Wkt
                                                       </span>
                                                     </>
@@ -5008,30 +5297,30 @@ export default function App() {
                               >
                                 <div
                                   className={
-                                    pageTeachers.length > 12 ? 'space-y-6' : 'space-y-9'
+                                    pageTeachers.length > 12 ? 'space-y-6' : 'space-y-8'
                                   }
                                 >
-                                  <p className="text-[10px] font-bold uppercase text-slate-500">
+                                  <p className="text-[11px] font-bold uppercase text-slate-500">
                                     Disediakan Oleh,
                                   </p>
                                   <div>
                                     <div className="w-44 mx-auto border-b border-slate-400"></div>
-                                    <p className="text-[10px] font-bold text-slate-700 mt-1 uppercase">
+                                    <p className="text-[11px] font-bold text-slate-700 mt-1 uppercase">
                                       Penolong Kanan Pentadbiran
                                     </p>
                                   </div>
                                 </div>
                                 <div
                                   className={
-                                    pageTeachers.length > 12 ? 'space-y-6' : 'space-y-9'
+                                    pageTeachers.length > 12 ? 'space-y-6' : 'space-y-8'
                                   }
                                 >
-                                  <p className="text-[10px] font-bold uppercase text-slate-500">
+                                  <p className="text-[11px] font-bold uppercase text-slate-500">
                                     Disahkan Oleh,
                                   </p>
                                   <div>
                                     <div className="w-44 mx-auto border-b border-slate-400"></div>
-                                    <p className="text-[10px] font-bold text-slate-700 mt-1 uppercase">
+                                    <p className="text-[11px] font-bold text-slate-700 mt-1 uppercase">
                                       Guru Besar / Pengetua
                                     </p>
                                   </div>
