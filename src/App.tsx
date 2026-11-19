@@ -1215,6 +1215,7 @@ export default function App() {
     ];
 
     let firstScale = 1;
+    let firstPageFont = 10;
     pages.forEach((el, idx) => {
       el.style.transform = 'none';
       el.style.width = `${TARGET_W}px`;
@@ -1222,43 +1223,50 @@ export default function App() {
 
       const tableEl = el.querySelector<HTMLTableElement>('table.print-auto-table');
       if (tableEl) {
-        let bestFont = 9;
-        let bestScale = 1;
-        let bestEffective = -1;
-        let foundNativeFit = false;
+        if (idx === 0) {
+          let bestFont = 9;
+          let bestScale = 1;
+          let bestEffective = -1;
+          let foundNativeFit = false;
 
-        for (const fontSize of CANDIDATE_FONTS) {
-          tableEl.style.fontSize = `${fontSize}px`;
-          const naturalW = Math.max(TARGET_W, el.scrollWidth);
-          const naturalH = Math.max(TARGET_H, el.scrollHeight);
-          const scale = Math.min(1, TARGET_W / naturalW, TARGET_H / naturalH);
-          const effective = fontSize * scale;
+          for (const fontSize of CANDIDATE_FONTS) {
+            tableEl.style.fontSize = `${fontSize}px`;
+            const naturalW = Math.max(TARGET_W, el.scrollWidth);
+            const naturalH = Math.max(TARGET_H, el.scrollHeight);
+            const scale = Math.min(1, TARGET_W / naturalW, TARGET_H / naturalH);
+            const effective = fontSize * scale;
 
-          if (scale >= 0.999) {
-            bestFont = fontSize;
-            bestScale = scale;
-            foundNativeFit = true;
-            break;
+            if (scale >= 0.999) {
+              bestFont = fontSize;
+              bestScale = scale;
+              foundNativeFit = true;
+              break;
+            }
+
+            if (
+              effective > bestEffective + 0.05 ||
+              (Math.abs(effective - bestEffective) <= 0.05 && scale > bestScale)
+            ) {
+              bestEffective = effective;
+              bestFont = fontSize;
+              bestScale = scale;
+            }
           }
 
-          if (
-            effective > bestEffective + 0.05 ||
-            (Math.abs(effective - bestEffective) <= 0.05 && scale > bestScale)
-          ) {
-            bestEffective = effective;
-            bestFont = fontSize;
-            bestScale = scale;
+          if (!foundNativeFit) {
+            tableEl.style.fontSize = `${bestFont}px`;
           }
-        }
-
-        if (!foundNativeFit) {
-          tableEl.style.fontSize = `${bestFont}px`;
+          firstPageFont = bestFont;
+        } else {
+          // Page 2 and subsequent pages follow Page 1's font size
+          tableEl.style.fontSize = `${firstPageFont}px`;
         }
       }
 
       const naturalW = Math.max(TARGET_W, el.scrollWidth);
       const naturalH = Math.max(TARGET_H, el.scrollHeight);
-      const scale = Math.min(1, TARGET_W / naturalW, TARGET_H / naturalH);
+      const rawScale = Math.min(1, TARGET_W / naturalW, TARGET_H / naturalH);
+      const scale = idx === 0 ? rawScale : Math.min(firstScale, rawScale);
 
       el.style.width = `${Math.floor(TARGET_W / scale)}px`;
       el.style.minHeight = `${Math.floor(TARGET_H / scale)}px`;
@@ -1775,7 +1783,7 @@ export default function App() {
         (d) => d.type === 'assignment' && d.username === currentUser.id
       );
 
-      const TEACHERS_PER_PAGE = 22;
+      const TEACHERS_PER_PAGE = 20;
       const teacherPages: DataRecord[][] = [];
       for (let i = 0; i < teachersForPdf.length; i += TEACHERS_PER_PAGE) {
         teacherPages.push(teachersForPdf.slice(i, i + TEACHERS_PER_PAGE));
@@ -1852,7 +1860,7 @@ export default function App() {
         pdf.setLineWidth(0.6);
         pdf.line(marginX, 24.8, pageW - marginX, 24.8);
 
-        // 2. Main Teacher Schedule Table (Max 22 Teachers per A4 Landscape Page)
+        // 2. Main Teacher Schedule Table (Max 20 Teachers per A4 Landscape Page)
         const isLastPage = pageIndex === teacherPages.length - 1;
         const tableTopY = 27.5;
         const maxTableBottomY = isLastPage ? 177.5 : 199;
@@ -1867,7 +1875,10 @@ export default function App() {
           });
         } else {
           const tCount = pageTeachers.length;
-          const sizingRowCount = Math.max(tCount, 1);
+          // Use Page 1's teacher count and table height so Page 2+ follows Page 1's exact font sizes
+          const firstPageRowCount = Math.max(teacherPages[0]?.length || 1, 1);
+          const firstPageMaxBottomY = teacherPages.length > 1 ? 199 : 177.5;
+          const firstPageAvailH = firstPageMaxBottomY - tableTopY;
           const subjCount = subjectsForPdf.length;
 
           const bilColW = 10;
@@ -1876,22 +1887,26 @@ export default function App() {
 
           const headerH = Math.min(
             12,
-            Math.max(7.0, availTableH / (sizingRowCount + 1.4))
+            Math.max(7.0, firstPageAvailH / (firstPageRowCount + 1.4))
+          );
+          const baseRowH = Math.min(
+            18,
+            (firstPageAvailH - headerH) / firstPageRowCount
           );
           const rowH = Math.min(
-            18,
-            (availTableH - headerH) / sizingRowCount
+            baseRowH,
+            (availTableH - headerH) / Math.max(tCount, 1)
           );
 
           const headerHPt = headerH * 2.83465;
-          const rowHPt = rowH * 2.83465;
+          const baseRowHPt = baseRowH * 2.83465;
 
           const headerFontSize = Math.min(
             11,
             Math.max(6, headerHPt * 0.54)
           );
-          const bilFontSize = Math.min(12, Math.max(6.8, rowHPt * 0.45));
-          const nameFontSize = Math.min(11.2, Math.max(6.4, rowHPt * 0.37));
+          const bilFontSize = Math.min(12, Math.max(6.8, baseRowHPt * 0.45));
+          const nameFontSize = Math.min(11.2, Math.max(6.4, baseRowHPt * 0.37));
           const guruFontSize = +(nameFontSize * 1.1).toFixed(2);
           const nameSubFontSize = Math.min(
             9.0,
@@ -1899,16 +1914,16 @@ export default function App() {
           );
           const cellFontSize = Math.min(
             11.5,
-            Math.max(6.0, Math.min(rowHPt * 0.38, subjColW * 0.65))
+            Math.max(6.0, Math.min(baseRowHPt * 0.38, subjColW * 0.65))
           );
           const subFontSize = Math.min(9.0, Math.max(4.8, cellFontSize * 0.78));
           const twoLineFontSize = Math.min(
             cellFontSize * 0.9,
-            Math.max(4.8, rowHPt * 0.27)
+            Math.max(4.8, baseRowHPt * 0.27)
           );
           const twoLineSubFontSize = Math.min(
             subFontSize,
-            Math.max(4.3, rowHPt * 0.23)
+            Math.max(4.3, baseRowHPt * 0.23)
           );
 
           // Draw Table Header
@@ -5015,9 +5030,9 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Document Outer Wrapper with A4 Landscape Page Frame (22 Teachers per Page) */}
+                {/* Document Outer Wrapper with A4 Landscape Page Frame (20 Teachers per Page) */}
                 {(() => {
-                  const TEACHERS_PER_PAGE = 22;
+                  const TEACHERS_PER_PAGE = 20;
                   const teacherPages: DataRecord[][] = [];
                   for (let i = 0; i < schoolTeachers.length; i += TEACHERS_PER_PAGE) {
                     teacherPages.push(schoolTeachers.slice(i, i + TEACHERS_PER_PAGE));
@@ -5025,6 +5040,9 @@ export default function App() {
                   if (teacherPages.length === 0) {
                     teacherPages.push([]);
                   }
+
+                  const firstPageTeacherCount =
+                    teacherPages[0]?.length || 0;
 
                   return (
                     <div className="bg-slate-100 p-4 md:p-6 rounded-2xl border border-slate-200 max-w-full overflow-x-auto custom-scrollbar flex flex-col items-center gap-8">
@@ -5059,7 +5077,7 @@ export default function App() {
                                     : `print-letterhead-${pageIndex + 1}`
                                 }
                                 className={`border-b-2 border-slate-900 text-center ${
-                                  pageTeachers.length > 10 ? 'pb-2 mb-2.5' : 'pb-3 mb-4'
+                                  firstPageTeacherCount > 10 ? 'pb-2 mb-2.5' : 'pb-3 mb-4'
                                 }`}
                               >
                                 <h4
@@ -5069,7 +5087,7 @@ export default function App() {
                                       : undefined
                                   }
                                   className={`${
-                                    pageTeachers.length > 12 ? 'text-base' : 'text-lg'
+                                    firstPageTeacherCount > 12 ? 'text-base' : 'text-lg'
                                   } font-extrabold text-slate-900 tracking-wide uppercase leading-tight`}
                                 >
                                   {currentUser?.username || '-'}
@@ -5096,7 +5114,7 @@ export default function App() {
                                 </div>
                               </div>
 
-                              {/* Main Table (Max 25 Teachers per Page) */}
+                              {/* Main Table (Max 20 Teachers per Page) */}
                               <div
                                 id={
                                   pageIndex === 0
@@ -5116,7 +5134,7 @@ export default function App() {
                                       <tr className="bg-slate-100 text-slate-900 border-b-2 border-slate-900">
                                         <th
                                           className={`border-r border-slate-900 text-center font-extrabold w-9 ${
-                                            pageTeachers.length > 12
+                                            firstPageTeacherCount > 12
                                               ? 'py-1 px-1'
                                               : 'py-1.5 px-1.5'
                                           }`}
@@ -5125,7 +5143,7 @@ export default function App() {
                                         </th>
                                         <th
                                           className={`border-r border-slate-900 font-extrabold text-left w-44 ${
-                                            pageTeachers.length > 12
+                                            firstPageTeacherCount > 12
                                               ? 'py-1 px-1.5'
                                               : 'py-1.5 px-2'
                                           }`}
@@ -5136,7 +5154,7 @@ export default function App() {
                                           <th
                                             key={subject.id}
                                             className={`border-r border-slate-900 font-extrabold text-center uppercase ${
-                                              pageTeachers.length > 12
+                                              firstPageTeacherCount > 12
                                                 ? 'py-1 px-1'
                                                 : 'py-1.5 px-1.5'
                                             }`}
@@ -5151,9 +5169,9 @@ export default function App() {
                                         const globalIndex =
                                           pageIndex * TEACHERS_PER_PAGE + index;
                                         const cellPad =
-                                          pageTeachers.length > 16
+                                          firstPageTeacherCount > 16
                                             ? 'py-0.5 px-1'
-                                            : pageTeachers.length > 10
+                                            : firstPageTeacherCount > 10
                                             ? 'py-1 px-1'
                                             : 'py-1.5 px-1.5';
                                         const teacherTotalWaktu = schoolAssignments
