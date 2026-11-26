@@ -15,6 +15,7 @@ import {
   where,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase';
+import { AuthPopupModal } from './components/AuthPopupModal';
 
 interface DataRecord {
   id: string;
@@ -127,6 +128,10 @@ export default function App() {
   const [showNewUserPassword, setShowNewUserPassword] = useState(false);
   const [savingUser, setSavingUser] = useState(false);
 
+  // Centered Animated Login & Sign Up Popup State (shown automatically on open)
+  const [authPopupOpen, setAuthPopupOpen] = useState<boolean>(true);
+  const [authPopupMode, setAuthPopupMode] = useState<'login' | 'signup'>('login');
+
   // Section 2: Login Form State
   const [selectedUserId, setSelectedUserId] = useState('');
   const [loginSchoolCode, setLoginSchoolCode] = useState('');
@@ -167,8 +172,11 @@ export default function App() {
   const [newLevelTahun, setNewLevelTahun] = useState('Tahun 1');
   const [savingLevel, setSavingLevel] = useState(false);
 
-  // Section 6: Second teacher slot toggle per (class_id + subject_id) cell
+  // Section 6: Second & third teacher slot toggles per (class_id + subject_id) cell
   const [expandedSecondTeacherCells, setExpandedSecondTeacherCells] = useState<
+    Record<string, boolean>
+  >({});
+  const [expandedThirdTeacherCells, setExpandedThirdTeacherCells] = useState<
     Record<string, boolean>
   >({});
 
@@ -257,8 +265,10 @@ export default function App() {
           const users = cloudRecords.filter((d) => d.type === 'user');
           if (users.length === 0) {
             switchTab(1);
+            setAuthPopupMode('signup');
           } else {
             switchTab(2);
+            setAuthPopupMode('login');
           }
         }
       },
@@ -434,9 +444,117 @@ export default function App() {
     if (!currentUser) {
       showMessage('🔒 Akses Terhad. Sila log masuk ke profil sekolah anda terlebih dahulu.', 'error');
       switchTab(2);
+      setAuthPopupMode('login');
+      setAuthPopupOpen(true);
       return;
     }
     switchTab(tabNumber);
+  };
+
+  const handlePopupLogin = ({
+    selectedUserId: popupSelectedId,
+    schoolCode,
+    password,
+  }: {
+    selectedUserId: string;
+    schoolCode: string;
+    password: string;
+  }): { ok: boolean; error?: string } => {
+    const trimmedCode = schoolCode.trim().toUpperCase();
+    const user =
+      (popupSelectedId
+        ? allData.find((u) => u.type === 'user' && u.id === popupSelectedId)
+        : undefined) ||
+      (trimmedCode
+        ? allData.find(
+            (u) =>
+              u.type === 'user' &&
+              ((u.name || '').toUpperCase() === trimmedCode ||
+                (u.username || '').toUpperCase() === trimmedCode ||
+                `${(u.name || '').toUpperCase()} - ${(u.username || '').toUpperCase()}` ===
+                  trimmedCode)
+          )
+        : undefined);
+
+    if (!popupSelectedId && !trimmedCode) {
+      return {
+        ok: false,
+        error: 'Sila masukkan kod sekolah atau pilih sekolah anda daripada senarai.',
+      };
+    }
+
+    if (!user) {
+      return {
+        ok: false,
+        error: 'Kod sekolah tidak dijumpai. Sila semak semula atau daftar sekolah baharu.',
+      };
+    }
+
+    const trimmedPass = password.trim();
+    if (!trimmedPass) {
+      return { ok: false, error: 'Sila masukkan kata laluan sekolah.' };
+    }
+
+    if (user.role !== trimmedPass) {
+      return {
+        ok: false,
+        error: 'Kata laluan salah. Sila semak semula kata laluan sekolah anda.',
+      };
+    }
+
+    setCurrentUser(user);
+    setSelectedUserId(user.id);
+    setLoginSchoolCode(user.name || '');
+    setLoginPassword('');
+    setLoginError(false);
+    setAuthPopupOpen(false);
+    showMessage('🔑 Log masuk berjaya!', 'success');
+
+    setTimeout(() => {
+      switchTab(6);
+    }, 350);
+
+    return { ok: true };
+  };
+
+  const handlePopupSignUp = async ({
+    schoolCode,
+    schoolName,
+    password,
+  }: {
+    schoolCode: string;
+    schoolName: string;
+    password: string;
+  }): Promise<{ ok: boolean; error?: string; createdUser?: DataRecord }> => {
+    const name = schoolCode.trim().toUpperCase();
+    const username = schoolName.trim().toUpperCase();
+    const pass = password.trim();
+
+    if (!name || !username || !pass) {
+      return { ok: false, error: 'Semua ruangan maklumat wajib diisi.' };
+    }
+
+    const exists = allData.some(
+      (d) => d.type === 'user' && (d.name || '').toUpperCase() === name
+    );
+    if (exists) {
+      return { ok: false, error: `Kod sekolah ${name} sudah didaftarkan.` };
+    }
+
+    const createdUser: DataRecord = {
+      id: Date.now().toString(),
+      type: 'user',
+      name,
+      username,
+      role: pass,
+    };
+
+    const result = await createRecord(createdUser);
+    if (result.isOk) {
+      showMessage('Pendaftaran sekolah berjaya!', 'success');
+      return { ok: true, createdUser };
+    }
+    return { ok: false, error: 'Pendaftaran sekolah gagal. Sila cuba lagi.' };
   };
 
   const handleLogin = () => {
@@ -483,6 +601,7 @@ export default function App() {
     setSelectedUserId(user.id);
     setLoginSchoolCode(user.name || '');
     setLoginPassword('');
+    setAuthPopupOpen(false);
     showMessage('🔑 Log masuk berjaya!', 'success');
 
     setTimeout(() => {
@@ -500,6 +619,8 @@ export default function App() {
     hideForm('subject');
     hideForm('level');
     switchTab(2);
+    setAuthPopupMode('login');
+    setAuthPopupOpen(true);
     showMessage('Log keluar berjaya.', 'success');
   };
 
@@ -943,7 +1064,7 @@ export default function App() {
     classId: string,
     subjectId: string,
     teacherId: string,
-    slot: 1 | 2 = 1
+    slot: 1 | 2 | 3 = 1
   ) => {
     if (!currentUser) {
       showMessage('Akses disekat. Sila log masuk dahulu.', 'error');
@@ -962,18 +1083,25 @@ export default function App() {
     if (slot === 1) {
       if (teacherId === '') {
         if (existing) {
-          if (existing.role) {
-            // Promote second teacher to first slot if first teacher is cleared
+          if (existing.role || existing.subject) {
+            // Promote remaining teachers up when first teacher is cleared
+            const nextT1 = existing.role || existing.subject || '';
+            const nextT2 = existing.role ? existing.subject || '' : '';
             const updated: DataRecord = {
               ...existing,
-              teacher_id: existing.role,
-              role: '',
+              teacher_id: nextT1,
+              role: nextT2,
+              subject: '',
             };
             await updateRecord(updated);
-            setExpandedSecondTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
+            if (!nextT2) {
+              setExpandedSecondTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
+            }
+            setExpandedThirdTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
           } else {
             await deleteRecord(existing);
             setExpandedSecondTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
+            setExpandedThirdTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
           }
         }
         return;
@@ -995,6 +1123,7 @@ export default function App() {
           subject_id: subjectId,
           teacher_id: teacherId,
           role: '',
+          subject: '',
           username: currentUser.id,
         };
         const result = await createRecord(newAssign);
@@ -1004,17 +1133,32 @@ export default function App() {
           showMessage('Ralat pemetaan tugasan baru', 'error');
         }
       }
-    } else {
-      // slot === 2 (Guru Kedua)
+    } else if (slot === 2) {
+      // slot === 2 (Guru Kedua -> role)
       if (teacherId === '') {
-        setExpandedSecondTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
         if (existing) {
-          if (existing.teacher_id) {
+          if (existing.subject) {
+            // Promote third teacher to second slot
+            const updated: DataRecord = {
+              ...existing,
+              role: existing.subject,
+              subject: '',
+            };
+            await updateRecord(updated);
+            setExpandedThirdTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
+          } else if (existing.teacher_id) {
             const updated: DataRecord = { ...existing, role: '' };
             await updateRecord(updated);
+            setExpandedSecondTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
+            setExpandedThirdTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
           } else {
             await deleteRecord(existing);
+            setExpandedSecondTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
+            setExpandedThirdTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
           }
+        } else {
+          setExpandedSecondTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
+          setExpandedThirdTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
         }
         return;
       }
@@ -1035,10 +1179,54 @@ export default function App() {
           subject_id: subjectId,
           teacher_id: teacherId,
           role: '',
+          subject: '',
           username: currentUser.id,
         };
         const result = await createRecord(newAssign);
         setExpandedSecondTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
+        if (result.isOk) {
+          showMessage('💾 Gandingan jadual berjaya dipetakan', 'success');
+        } else {
+          showMessage('Ralat pemetaan tugasan baru', 'error');
+        }
+      }
+    } else {
+      // slot === 3 (Guru Ketiga -> subject)
+      if (teacherId === '') {
+        setExpandedThirdTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
+        if (existing) {
+          if (existing.teacher_id || existing.role) {
+            const updated: DataRecord = { ...existing, subject: '' };
+            await updateRecord(updated);
+          } else {
+            await deleteRecord(existing);
+          }
+        }
+        return;
+      }
+
+      if (existing) {
+        const updated: DataRecord = { ...existing, subject: teacherId };
+        const result = await updateRecord(updated);
+        if (result.isOk) {
+          showMessage('💾 Guru ketiga berjaya dipetakan', 'success');
+        } else {
+          showMessage('Ralat mengemaskini guru ketiga', 'error');
+        }
+      } else {
+        const newAssign: DataRecord = {
+          id: Date.now().toString(),
+          type: 'assignment',
+          class_id: classId,
+          subject_id: subjectId,
+          teacher_id: teacherId,
+          role: '',
+          subject: '',
+          username: currentUser.id,
+        };
+        const result = await createRecord(newAssign);
+        setExpandedSecondTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
+        setExpandedThirdTeacherCells((prev) => ({ ...prev, [cellKey]: false }));
         if (result.isOk) {
           showMessage('💾 Gandingan jadual berjaya dipetakan', 'success');
         } else {
@@ -1533,7 +1721,11 @@ export default function App() {
                 assignment && assignment.role
                   ? teachersForPdf.find((t) => t.id === assignment.role)
                   : null;
-              if (!t1 && !t2) return sum;
+              const t3 =
+                assignment && assignment.subject
+                  ? teachersForPdf.find((t) => t.id === assignment.subject)
+                  : null;
+              if (!t1 && !t2 && !t3) return sum;
               const timeVal = parseFloat(
                 cls.level === 'Tahap 1'
                   ? subject.role || '0'
@@ -1601,6 +1793,11 @@ export default function App() {
                 assignment && assignment.role
                   ? teachersForPdf.find((t) => t.id === assignment.role)
                   : null;
+              const t3 =
+                assignment && assignment.subject
+                  ? teachersForPdf.find((t) => t.id === assignment.subject)
+                  : null;
+              const activeTeachers = [t1, t2, t3].filter((t): t is DataRecord => Boolean(t));
 
               const time =
                 cls.level === 'Tahap 1'
@@ -1611,11 +1808,61 @@ export default function App() {
 
               const centerX = rX + subjColW / 2;
 
-              if (t1 && t2) {
+              if (activeTeachers.length >= 3) {
+                const fourLineFontSize = Math.min(
+                  threeLineFontSize * 0.88,
+                  Math.max(4.0, rowHPt * 0.21)
+                );
+                const fourLineSubFontSize = Math.min(
+                  threeLineSubFontSize * 0.9,
+                  Math.max(3.6, rowHPt * 0.18)
+                );
                 pdf.setTextColor(15, 23, 42);
                 pdf.setFont('helvetica', 'bold');
                 drawFittedText(
-                  String(t1.subject || t1.name || '').toUpperCase(),
+                  String(activeTeachers[0].subject || activeTeachers[0].name || '').toUpperCase(),
+                  centerX,
+                  rY + rowH * 0.24,
+                  subjColW - 1.2,
+                  fourLineFontSize,
+                  3.8,
+                  'center'
+                );
+                drawFittedText(
+                  `+ ${String(activeTeachers[1].subject || activeTeachers[1].name || '').toUpperCase()}`,
+                  centerX,
+                  rY + rowH * 0.46,
+                  subjColW - 1.2,
+                  fourLineFontSize,
+                  3.8,
+                  'center'
+                );
+                drawFittedText(
+                  `+ ${String(activeTeachers[2].subject || activeTeachers[2].name || '').toUpperCase()}`,
+                  centerX,
+                  rY + rowH * 0.68,
+                  subjColW - 1.2,
+                  fourLineFontSize,
+                  3.8,
+                  'center'
+                );
+
+                pdf.setTextColor(100, 116, 139);
+                pdf.setFont('helvetica', 'bold');
+                drawFittedText(
+                  `${time} Wkt`,
+                  centerX,
+                  rY + rowH * 0.9,
+                  subjColW - 1.2,
+                  fourLineSubFontSize,
+                  3.5,
+                  'center'
+                );
+              } else if (activeTeachers.length === 2) {
+                pdf.setTextColor(15, 23, 42);
+                pdf.setFont('helvetica', 'bold');
+                drawFittedText(
+                  String(activeTeachers[0].subject || activeTeachers[0].name || '').toUpperCase(),
                   centerX,
                   rY + rowH * 0.3,
                   subjColW - 1.2,
@@ -1624,7 +1871,7 @@ export default function App() {
                   'center'
                 );
                 drawFittedText(
-                  `+ ${String(t2.subject || t2.name || '').toUpperCase()}`,
+                  `+ ${String(activeTeachers[1].subject || activeTeachers[1].name || '').toUpperCase()}`,
                   centerX,
                   rY + rowH * 0.58,
                   subjColW - 1.2,
@@ -1644,12 +1891,12 @@ export default function App() {
                   3.8,
                   'center'
                 );
-              } else if (t1 || t2) {
-                const activeT = t1 || t2;
+              } else if (activeTeachers.length === 1) {
+                const activeT = activeTeachers[0];
                 pdf.setTextColor(15, 23, 42);
                 pdf.setFont('helvetica', 'bold');
                 drawFittedText(
-                  String(activeT?.subject || activeT?.name || '').toUpperCase(),
+                  String(activeT.subject || activeT.name || '').toUpperCase(),
                   centerX,
                   rY + rowH * 0.43,
                   subjColW - 1.2,
@@ -1983,7 +2230,12 @@ export default function App() {
             let rX = marginX;
 
             const teacherTotalWaktu = assignmentsForPdf
-              .filter((a) => a.teacher_id === teacher.id || a.role === teacher.id)
+              .filter(
+                (a) =>
+                  a.teacher_id === teacher.id ||
+                  a.role === teacher.id ||
+                  a.subject === teacher.id
+              )
               .reduce((sum, a) => {
                 const cls = classesForPdf.find((c) => c.id === a.class_id);
                 const subj = subjectsForPdf.find((s) => s.id === a.subject_id);
@@ -2047,7 +2299,9 @@ export default function App() {
               const matchedAssignments = assignmentsForPdf.filter(
                 (a) =>
                   a.subject_id === subject.id &&
-                  (a.teacher_id === teacher.id || a.role === teacher.id)
+                  (a.teacher_id === teacher.id ||
+                    a.role === teacher.id ||
+                    a.subject === teacher.id)
               );
 
               const matchedClasses = matchedAssignments
@@ -2242,6 +2496,120 @@ export default function App() {
         })
     : [];
 
+  const exportSchoolDataJson = () => {
+    if (!currentUser) {
+      showMessage('Akses disekat. Sila log masuk dahulu.', 'error');
+      return;
+    }
+
+    try {
+      const teacherMap = new Map(schoolTeachers.map((t) => [t.id, t]));
+      const classMap = new Map(schoolClasses.map((c) => [c.id, c]));
+      const subjectMap = new Map(schoolSubjects.map((s) => [s.id, s]));
+
+      const exportPayload = {
+        exportedAt: new Date().toISOString(),
+        appVersion: '2.0',
+        school: {
+          id: currentUser.id,
+          code: currentUser.name || '',
+          name: currentUser.username || '',
+        },
+        summary: {
+          totalTeachers: schoolTeachers.length,
+          totalLevels: schoolLevels.length,
+          totalClasses: schoolClasses.length,
+          totalSubjects: schoolSubjects.length,
+          totalAssignments: schoolAssignments.length,
+        },
+        teachers: schoolTeachers.map((t) => ({
+          id: t.id,
+          name: t.name || '',
+          shortName: t.subject || '',
+          maxHours: t.maxHours ?? 30,
+        })),
+        levels: schoolLevels.map((l) => ({
+          id: l.id,
+          tahap: l.name || l.level || '',
+          tahun: l.role || '',
+        })),
+        classes: schoolClasses.map((c) => {
+          const classTeacher = c.role ? teacherMap.get(c.role) : undefined;
+          return {
+            id: c.id,
+            name: c.name || '',
+            shortName: c.subject || '',
+            tahun: c.class_id || '',
+            level: c.level || '',
+            classTeacherId: c.role || '',
+            classTeacherName: classTeacher ? classTeacher.name || '' : '',
+          };
+        }),
+        subjects: schoolSubjects.map((s) => ({
+          id: s.id,
+          name: s.name || '',
+          shortName: s.class_id || '',
+          periodsTahap1: Number(s.role || 0),
+          periodsTahap2: Number(s.subject || 0),
+          periodsTahap3: Number(s.subject_id || 0),
+        })),
+        assignments: schoolAssignments.map((a) => {
+          const cls = a.class_id ? classMap.get(a.class_id) : undefined;
+          const subj = a.subject_id ? subjectMap.get(a.subject_id) : undefined;
+          const teacherIds = [a.teacher_id, a.role, a.subject].filter(
+            (id): id is string => Boolean(id)
+          );
+          const teachers = teacherIds.map((id) => {
+            const t = teacherMap.get(id);
+            return {
+              id,
+              name: t?.name || '',
+              shortName: t?.subject || '',
+            };
+          });
+          return {
+            id: a.id,
+            classId: a.class_id || '',
+            className: cls?.name || '',
+            classLevel: cls?.level || '',
+            subjectId: a.subject_id || '',
+            subjectName: subj?.name || '',
+            subjectShortName: subj?.class_id || '',
+            teacherIds,
+            teachers,
+          };
+        }),
+        rawRecords: {
+          teachers: schoolTeachers,
+          levels: schoolLevels,
+          classes: schoolClasses,
+          subjects: schoolSubjects,
+          assignments: schoolAssignments,
+        },
+      };
+
+      const rawSchoolCode = String(currentUser.name || 'Sekolah').trim();
+      const safeSchoolCode = rawSchoolCode.replace(/[\\/:*?"<>|]/g, '_') || 'Sekolah';
+      const fileName = `${safeSchoolCode} - Data Pemetaan.json`;
+
+      const jsonString = JSON.stringify(exportPayload, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      showMessage(`💾 Fail ${fileName} berjaya dimuat turun!`, 'success');
+    } catch (error) {
+      console.error('JSON export failed:', error);
+      showMessage('Ralat semasa mengeksport data JSON', 'error');
+    }
+  };
+
   useEffect(() => {
     if (currentTab === 9 || currentTab === 11) {
       const raf = requestAnimationFrame(() => {
@@ -2345,7 +2713,8 @@ export default function App() {
                           schoolClassIds.has(d.class_id) &&
                           schoolSubjectIds.has(d.subject_id) &&
                           ((d.teacher_id && schoolTeacherIds.has(d.teacher_id)) ||
-                            (d.role && schoolTeacherIds.has(d.role)))
+                            (d.role && schoolTeacherIds.has(d.role)) ||
+                            (d.subject && schoolTeacherIds.has(d.subject)))
                       )
                       .map((d) => `${d.class_id}_${d.subject_id}`)
                   ).size;
@@ -2481,7 +2850,10 @@ export default function App() {
   // Teacher Report Computation
   const teacherReportData = schoolTeachers.map((teacher) => {
     const teacherAssignments = schoolAssignments.filter(
-      (a) => a.teacher_id === teacher.id || a.role === teacher.id
+      (a) =>
+        a.teacher_id === teacher.id ||
+        a.role === teacher.id ||
+        a.subject === teacher.id
     );
     const subjectMap: Record<
       string,
@@ -2548,11 +2920,15 @@ export default function App() {
         const teacher2 = assignment.role
           ? schoolTeachers.find((t) => t.id === assignment.role)
           : null;
-        if (!subject || (!teacher1 && !teacher2)) return null;
+        const teacher3 = assignment.subject
+          ? schoolTeachers.find((t) => t.id === assignment.subject)
+          : null;
+        if (!subject || (!teacher1 && !teacher2 && !teacher3)) return null;
 
         const teacherNames = [
           teacher1 ? teacher1.subject || teacher1.name || '' : '',
           teacher2 ? teacher2.subject || teacher2.name || '' : '',
+          teacher3 ? teacher3.subject || teacher3.name || '' : '',
         ]
           .filter(Boolean)
           .join(' + ');
@@ -3045,25 +3421,39 @@ export default function App() {
                 {headerDesc}
               </p>
             </div>
-            {/* Status Badge */}
-            <div className="flex items-center gap-2 self-start sm:self-center">
-              <span className="flex h-3.5 w-3.5 relative">
-                <span
-                  id="pulse-dot"
-                  className={`animate-ping absolute inline-flex h-full w-full rounded-full ${
-                    currentUser ? 'bg-emerald-400' : 'bg-amber-400'
-                  } opacity-75`}
-                ></span>
-                <span
-                  id="status-dot"
-                  className={`relative inline-flex rounded-full h-3.5 w-3.5 ${
-                    currentUser ? 'bg-emerald-500' : 'bg-amber-500'
-                  }`}
-                ></span>
-              </span>
-              <span id="status-text" className="text-sm font-semibold text-slate-600">
-                {currentUser ? currentUser.name : 'Belum Log Masuk'}
-              </span>
+            {/* Status & Auth Trigger */}
+            <div className="flex items-center gap-3 self-start sm:self-center">
+              {!currentUser && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthPopupMode('login');
+                    setAuthPopupOpen(true);
+                  }}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Log Masuk / Daftar
+                </button>
+              )}
+              <div className="flex items-center gap-2">
+                <span className="flex h-3.5 w-3.5 relative">
+                  <span
+                    id="pulse-dot"
+                    className={`animate-ping absolute inline-flex h-full w-full rounded-full ${
+                      currentUser ? 'bg-emerald-400' : 'bg-amber-400'
+                    } opacity-75`}
+                  ></span>
+                  <span
+                    id="status-dot"
+                    className={`relative inline-flex rounded-full h-3.5 w-3.5 ${
+                      currentUser ? 'bg-emerald-500' : 'bg-amber-500'
+                    }`}
+                  ></span>
+                </span>
+                <span id="status-text" className="text-sm font-semibold text-slate-600">
+                  {currentUser ? currentUser.name : 'Belum Log Masuk'}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -4246,19 +4636,29 @@ export default function App() {
                 id="section-6"
                 className="tab-content bg-white rounded-2xl shadow-sm border border-slate-200/80 p-6 md:p-8 fade-in"
               >
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
                   <div>
                     <h3 className="text-xl font-bold text-slate-900">Matriks Pemetaan Pengajaran</h3>
                     <p className="text-slate-500 text-xs mt-0.5">
                       Urus gandingan guru dan subjek di dalam kelas. Jumlah waktu beban guru akan dihitung secara automatik.
                     </p>
                   </div>
-                  <button
-                    onClick={confirmClearAssignments}
-                    className="px-3.5 py-2 bg-slate-100 hover:bg-rose-50 hover:text-rose-600 rounded-lg font-bold text-slate-600 text-sm border border-transparent hover:border-rose-100 transition-all"
-                  >
-                    🗑️ Padam Semua Gandingan
-                  </button>
+                  <div className="flex flex-col gap-2 sm:items-stretch shrink-0">
+                    <button
+                      type="button"
+                      onClick={confirmClearAssignments}
+                      className="px-3.5 py-2 bg-slate-100 hover:bg-rose-50 hover:text-rose-600 rounded-lg font-bold text-slate-600 text-sm border border-transparent hover:border-rose-100 transition-all cursor-pointer"
+                    >
+                      🗑️ Padam Semua Gandingan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exportSchoolDataJson}
+                      className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-bold text-sm border border-indigo-200/80 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      📥 Eksport Data (JSON)
+                    </button>
+                  </div>
                 </div>
 
                 {/* Interactive Help Banner */}
@@ -4270,7 +4670,7 @@ export default function App() {
                       1. Matriks memaparkan semua kelas berdaftar di bahagian baris, dan mata pelajaran di bahagian lajur.
                     </p>
                     <p>
-                      2. Pilih nama guru dari senarai bagi setiap kotak sel kelas - subjek. Tekan + untuk masukkan nama guru pairing jika ada
+                      2. Pilih nama guru dari senarai bagi setiap kotak sel kelas - subjek. Tekan + untuk masukkan nama guru pairing (sehingga 3 orang guru) jika ada
                     </p>
                     <p>
                       3. Sistem akan mengira jumlah peruntukan waktu mengajar mingguan guru secara automatik di Tab Laporan Pemetaan Guru.
@@ -4345,11 +4745,19 @@ export default function App() {
                                   assignment && assignment.role
                                     ? schoolTeachers.find((t) => t.id === assignment.role)
                                     : null;
+                                const assignedTeacher3 =
+                                  assignment && assignment.subject
+                                    ? schoolTeachers.find((t) => t.id === assignment.subject)
+                                    : null;
+                                const showThirdSlot =
+                                  Boolean(assignment?.subject) ||
+                                  Boolean(expandedThirdTeacherCells[cellKey]);
                                 const showSecondSlot =
                                   Boolean(assignment?.role) ||
-                                  Boolean(expandedSecondTeacherCells[cellKey]);
+                                  Boolean(expandedSecondTeacherCells[cellKey]) ||
+                                  showThirdSlot;
                                 const highlightBg =
-                                  assignedTeacher || assignedTeacher2
+                                  assignedTeacher || assignedTeacher2 || assignedTeacher3
                                     ? 'bg-emerald-50/30'
                                     : 'bg-slate-50/10';
 
@@ -4405,12 +4813,55 @@ export default function App() {
                                             </option>
                                           ))}
                                         </select>
+                                        {!showThirdSlot && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setExpandedThirdTeacherCells((prev) => ({
+                                                ...prev,
+                                                [cellKey]: true,
+                                              }))
+                                            }
+                                            title="Tambah Guru Ketiga"
+                                            className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold text-sm border border-indigo-200/60 transition-all"
+                                          >
+                                            +
+                                          </button>
+                                        )}
                                         <button
                                           type="button"
                                           onClick={() =>
                                             updateAssignment(cls.id, subject.id, '', 2)
                                           }
                                           title="Padam Guru Kedua"
+                                          className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs border border-rose-200/60 transition-all"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    )}
+                                    {showThirdSlot && (
+                                      <div className="flex items-center gap-1.5 mt-1.5 min-w-max">
+                                        <select
+                                          value={assignedTeacher3 ? assignedTeacher3.id : ''}
+                                          onChange={(e) =>
+                                            updateAssignment(cls.id, subject.id, e.target.value, 3)
+                                          }
+                                          className="matrix-select w-auto min-w-[115px] flex-1 pl-2.5 pr-7 py-1.5 border border-indigo-200 focus:border-indigo-500 rounded-lg focus:outline-none text-xs font-semibold text-slate-700 bg-white"
+                                        >
+                                          <option value="">-- Guru Ketiga --</option>
+                                          {schoolTeachers.map((teacher) => (
+                                            <option key={teacher.id} value={teacher.id}>
+                                              {teacher.subject || teacher.name}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            updateAssignment(cls.id, subject.id, '', 3)
+                                          }
+                                          title="Padam Guru Ketiga"
                                           className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs border border-rose-200/60 transition-all"
                                         >
                                           ✕
@@ -4852,7 +5303,17 @@ export default function App() {
                                                     (t) => t.id === assignment.role
                                                   )
                                                 : null;
-                                            if (!assignedTeacher && !assignedTeacher2)
+                                            const assignedTeacher3 =
+                                              assignment && assignment.subject
+                                                ? schoolTeachers.find(
+                                                    (t) => t.id === assignment.subject
+                                                  )
+                                                : null;
+                                            if (
+                                              !assignedTeacher &&
+                                              !assignedTeacher2 &&
+                                              !assignedTeacher3
+                                            )
                                               return sum;
                                             const timeVal = parseFloat(
                                               cls.level === 'Tahap 1'
@@ -4908,6 +5369,12 @@ export default function App() {
                                                       (t) => t.id === assignment.role
                                                     )
                                                   : null;
+                                              const assignedTeacher3 =
+                                                assignment && assignment.subject
+                                                  ? schoolTeachers.find(
+                                                      (t) => t.id === assignment.subject
+                                                    )
+                                                  : null;
                                               const time =
                                                 cls.level === 'Tahap 1'
                                                   ? subject.role || '0'
@@ -4920,7 +5387,9 @@ export default function App() {
                                                   key={subject.id}
                                                   className={`border-r border-slate-900 ${cellPad} text-center bg-white`}
                                                 >
-                                                  {assignedTeacher || assignedTeacher2 ? (
+                                                  {assignedTeacher ||
+                                                  assignedTeacher2 ||
+                                                  assignedTeacher3 ? (
                                                     <>
                                                       {assignedTeacher && (
                                                         <span className="font-extrabold text-slate-900 block leading-tight">
@@ -4933,6 +5402,13 @@ export default function App() {
                                                           +{' '}
                                                           {assignedTeacher2.subject ||
                                                             assignedTeacher2.name}
+                                                        </span>
+                                                      )}
+                                                      {assignedTeacher3 && (
+                                                        <span className="font-extrabold text-slate-900 block leading-tight">
+                                                          +{' '}
+                                                          {assignedTeacher3.subject ||
+                                                            assignedTeacher3.name}
                                                         </span>
                                                       )}
                                                       <span className="text-[0.8em] text-slate-500 font-bold block leading-none mt-0.5">
@@ -5178,7 +5654,8 @@ export default function App() {
                                           .filter(
                                             (a) =>
                                               a.teacher_id === teacher.id ||
-                                              a.role === teacher.id
+                                              a.role === teacher.id ||
+                                              a.subject === teacher.id
                                           )
                                           .reduce((sum, a) => {
                                             const cls = schoolClasses.find(
@@ -5222,7 +5699,8 @@ export default function App() {
                                                   (a) =>
                                                     a.subject_id === subject.id &&
                                                     (a.teacher_id === teacher.id ||
-                                                      a.role === teacher.id)
+                                                      a.role === teacher.id ||
+                                                      a.subject === teacher.id)
                                                 );
                                               const matchedClasses = matchedAssignments
                                                 .map((a) =>
@@ -5436,6 +5914,18 @@ export default function App() {
         </div>
       )}
 
+      {/* Centered Animated Login & Sign Up Popup Window */}
+      <AuthPopupModal
+        isOpen={!currentUser && authPopupOpen}
+        mode={authPopupMode}
+        onModeChange={setAuthPopupMode}
+        onClose={() => setAuthPopupOpen(false)}
+        usersList={usersList}
+        onLoginSubmit={handlePopupLogin}
+        onSignUpSubmit={handlePopupSignUp}
+        onInjectDemo={injectDemoData}
+      />
+
       {/* Toast Notifications */}
       {toasts.map((toast) => (
         <div
@@ -5444,7 +5934,7 @@ export default function App() {
             opacity: toast.visible ? 1 : 0,
             transform: toast.visible ? 'translateY(0)' : 'translateY(8px)',
           }}
-          className={`fixed top-6 right-6 px-5 py-3.5 rounded-xl text-white font-extrabold z-50 text-xs shadow-xl flex items-center space-x-2 border transition-all duration-300 ${
+          className={`fixed top-6 right-6 px-5 py-3.5 rounded-xl text-white font-extrabold z-[60] text-xs shadow-xl flex items-center space-x-2 border transition-all duration-300 ${
             toast.type === 'success'
               ? 'bg-emerald-600 border-emerald-500'
               : 'bg-rose-600 border-rose-500'

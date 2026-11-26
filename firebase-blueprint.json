@@ -29,12 +29,12 @@
         },
         "role": {
           "type": "string",
-          "description": "School password (for user), class teacher ID (for class), Tahap 1 period count (for subject), or Tahun (Tahun 1-6 for level).",
+          "description": "School password (for user), class teacher ID (for class), Tahap 1 period count (for subject), Tahun (Tahun 1-6 for level), or second assigned teacher ID (for assignment).",
           "maxLength": 200
         },
         "subject": {
           "type": "string",
-          "description": "Teacher short code (for teacher) or Tahap 2 period count (for subject).",
+          "description": "Teacher short code (for teacher), Tahap 2 period count (for subject), or third assigned teacher ID (for assignment).",
           "maxLength": 200
         },
         "maxHours": {
